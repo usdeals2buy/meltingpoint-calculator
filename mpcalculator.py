@@ -380,11 +380,12 @@ analysis — always assign from symmetry rules.
     """)
 
 # ── Tabs ──────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "⚗️  Calculator",
     "📊  Sensitivity & 3D",
     "📚  Validation DB",
     "📖  Theory & Guide",
+    "📦  Batch Calculator",
 ])
 
 
@@ -612,6 +613,47 @@ Anthracene=1 · Steroid backbone=1
             plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="white",
         )
         st.plotly_chart(fig_wf, use_container_width=True)
+
+    # ── Quick Compound Comparison ─────────────────────────────────
+    st.markdown("---")
+    with st.expander("🔀 Quick Comparison — Add up to 4 compounds", expanded=False):
+        st.caption(
+            "Enter σ, SP3, SP2, RING for each compound to compare ΔSm side-by-side."
+        )
+        n_compare = st.slider("Number of compounds to compare", 2, 4, 2, key="n_cmp")
+        cmp_cols  = st.columns(n_compare)
+        cmp_rows  = []
+        for ci, ccol in enumerate(cmp_cols[:n_compare]):
+            with ccol:
+                cname  = st.text_input(f"Name {ci+1}", value=f"Compound {ci+1}", key=f"cn{ci}")
+                csig   = st.number_input(f"σ", 1, 120, 1, key=f"cs{ci}")
+                csp3   = st.number_input(f"SP3", 0, 200, 0, key=f"c3{ci}")
+                csp2   = st.number_input(f"SP2", 0, 200, 0, key=f"c2{ci}")
+                cring  = st.number_input(f"RING", 0, 50, 1, key=f"cr{ci}")
+                cphi   = calc_phi(csp3, csp2, cring)
+                cdsm   = calc_delta_sm(csig, cphi)
+                st.metric("ΔSm (J/K·mol)", f"{cdsm:.2f}")
+                cmp_rows.append({"Compound": cname, "σ": csig, "SP3": csp3,
+                                 "SP2": csp2, "RING": cring, "Φ": round(cphi, 2),
+                                 "ΔSm (J/K·mol)": round(cdsm, 2)})
+        if cmp_rows:
+            df_cmp = pd.DataFrame(cmp_rows)
+            fig_cmp = go.Figure(go.Bar(
+                x=df_cmp["Compound"],
+                y=df_cmp["ΔSm (J/K·mol)"],
+                marker_color=["#636EFA", "#EF553B", "#00CC96", "#FFA15A"][:n_compare],
+                text=df_cmp["ΔSm (J/K·mol)"].round(1),
+                textposition="outside",
+            ))
+            fig_cmp.add_hline(y=56.5, line_dash="dash", line_color="#888",
+                               annotation_text="Walden 56.5")
+            fig_cmp.update_layout(
+                yaxis_title="ΔSm (J/K·mol)", height=300,
+                plot_bgcolor="#0e1117", paper_bgcolor="#0e1117",
+                font_color="white", showlegend=False,
+            )
+            st.plotly_chart(fig_cmp, use_container_width=True)
+            st.dataframe(df_cmp, use_container_width=True, hide_index=True)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -953,6 +995,268 @@ RMSE ≈ 0.4–0.5 log units on large non-electrolyte datasets.
 4. **Walden P** (1908). Schmelzwärme und Molekulargrösse. *Z. Elektrotech. Elektrochem.* 14, 713–724.
 5. **Wei J** (1999). Molecular Symmetry, Rotational Entropy, and Elevated Melting Points. *Ind. Eng. Chem. Res.* **38**(12), 5019–5027.
     """)
+
+# ════════════════════════════════════════════════════════════════
+#  TAB 5 — BATCH CALCULATOR
+# ════════════════════════════════════════════════════════════════
+with tab5:
+    st.header("📦 Batch ΔSm Calculator")
+    st.markdown(
+        "Upload a CSV or paste data to calculate ΔSm for many compounds at once. "
+        "Results are downloadable as CSV."
+    )
+
+    # ── CSV template download ─────────────────────────────────────
+    template_df = pd.DataFrame([
+        {"name": "Benzene",       "sigma": 12, "sp3": 0, "sp2": 0, "ring": 1, "delta_hm_kj": 9.87},
+        {"name": "Naphthalene",   "sigma":  4, "sp3": 0, "sp2": 0, "ring": 1, "delta_hm_kj": 19.06},
+        {"name": "n-Hexane",      "sigma":  1, "sp3": 4, "sp2": 0, "ring": 0, "delta_hm_kj": 13.08},
+        {"name": "Aspirin",       "sigma":  1, "sp3": 1, "sp2": 2, "ring": 1, "delta_hm_kj": 29.80},
+        {"name": "Cyclohexane",   "sigma":  6, "sp3": 0, "sp2": 0, "ring": 1, "delta_hm_kj": 2.63},
+        {"name": "Your compound", "sigma":  1, "sp3": 0, "sp2": 0, "ring": 0, "delta_hm_kj": ""},
+    ])
+
+    st.download_button(
+        "⬇️  Download CSV Template",
+        template_df.to_csv(index=False),
+        "dsm_batch_template.csv",
+        "text/csv",
+        help="Fill in sigma, sp3, sp2, ring. delta_hm_kj is optional (needed for Tm).",
+    )
+
+    st.markdown("**Required columns:** `name`, `sigma`, `sp3`, `sp2`, `ring`  "
+                "  |  **Optional:** `delta_hm_kj` (for Tm), `smiles` (auto-fill sp3/sp2/ring)")
+
+    # ── Input method ─────────────────────────────────────────────
+    input_method = st.radio(
+        "Input method",
+        ["📁 Upload CSV file", "✏️ Paste CSV text", "🔬 Enter SMILES list"],
+        horizontal=True,
+    )
+
+    raw_df = None
+
+    if input_method == "📁 Upload CSV file":
+        uploaded = st.file_uploader("Upload CSV", type=["csv"])
+        if uploaded:
+            try:
+                raw_df = pd.read_csv(uploaded)
+                st.success(f"✅ Loaded {len(raw_df)} rows")
+            except Exception as e:
+                st.error(f"❌ Could not read CSV: {e}")
+
+    elif input_method == "✏️ Paste CSV text":
+        paste = st.text_area(
+            "Paste CSV data (with header row)",
+            value="name,sigma,sp3,sp2,ring,delta_hm_kj\n"
+                  "Benzene,12,0,0,1,9.87\n"
+                  "Aspirin,1,1,2,1,29.80\n"
+                  "n-Hexane,1,4,0,0,13.08",
+            height=160,
+        )
+        if paste.strip():
+            try:
+                import io
+                raw_df = pd.read_csv(io.StringIO(paste))
+                st.success(f"✅ Parsed {len(raw_df)} rows")
+            except Exception as e:
+                st.error(f"❌ Parse error: {e}")
+
+    elif input_method == "🔬 Enter SMILES list":
+        st.markdown(
+            "Enter one SMILES per line. You must still provide σ (it cannot be "
+            "auto-computed). SP3/SP2/RING will be auto-computed."
+        )
+        smiles_paste = st.text_area(
+            "SMILES list  (format: `NAME,SMILES,SIGMA`  or just  `SMILES,SIGMA`)",
+            value="Benzene,c1ccccc1,12\n"
+                  "Naphthalene,c1ccc2ccccc2c1,4\n"
+                  "n-Hexane,CCCCCC,1\n"
+                  "Aspirin,CC(=O)Oc1ccccc1C(=O)O,1\n"
+                  "Cyclohexane,C1CCCCC1,6",
+            height=160,
+        )
+        if smiles_paste.strip():
+            smi_rows = []
+            for line_num, line in enumerate(smiles_paste.strip().splitlines(), 1):
+                parts = [p.strip() for p in line.split(",")]
+                try:
+                    if len(parts) == 3:
+                        cname, csmi, csig = parts[0], parts[1], int(parts[2])
+                    elif len(parts) == 2:
+                        cname, csmi, csig = f"Compound {line_num}", parts[0], int(parts[1])
+                    else:
+                        st.warning(f"Line {line_num}: expected NAME,SMILES,SIGMA — skipping")
+                        continue
+                    r, err = parse_smiles(csmi)
+                    if err:
+                        st.warning(f"Line {line_num} ({cname}): SMILES error — {err}")
+                        continue
+                    smi_rows.append({
+                        "name": cname, "sigma": csig,
+                        "sp3": r["sp3"], "sp2": r["sp2"], "ring": r["ring"],
+                        "smiles": csmi,
+                    })
+                except (ValueError, IndexError) as e:
+                    st.warning(f"Line {line_num}: {e} — skipping")
+            if smi_rows:
+                raw_df = pd.DataFrame(smi_rows)
+                st.success(f"✅ Parsed {len(raw_df)} compounds from SMILES")
+
+    # ── Process & display ─────────────────────────────────────────
+    if raw_df is not None and not raw_df.empty:
+        # Normalise column names
+        raw_df.columns = [c.strip().lower().replace(" ", "_") for c in raw_df.columns]
+
+        required = {"name", "sigma", "sp3", "sp2", "ring"}
+        missing  = required - set(raw_df.columns)
+        if missing:
+            st.error(f"❌ Missing required columns: {missing}")
+        else:
+            # Coerce numeric
+            for col in ["sigma", "sp3", "sp2", "ring"]:
+                raw_df[col] = pd.to_numeric(raw_df[col], errors="coerce")
+            raw_df.dropna(subset=["sigma", "sp3", "sp2", "ring"], inplace=True)
+
+            # Compute results
+            results = []
+            for _, row in raw_df.iterrows():
+                sig  = int(row["sigma"])
+                s3   = int(row["sp3"])
+                s2   = int(row["sp2"])
+                rg   = int(row["ring"])
+                dhm  = float(row["delta_hm_kj"]) if "delta_hm_kj" in row and str(row["delta_hm_kj"]) not in ("", "nan") else None
+
+                ph   = calc_phi(s3, s2, rg)
+                dsm  = calc_delta_sm(sig, ph)
+                tm_k = calc_tm(dhm, dsm) if dhm else None
+                tm_c = round(tm_k - 273.15, 1) if tm_k else None
+
+                results.append({
+                    "Compound":         str(row["name"]),
+                    "σ":                sig,
+                    "SP3":              s3,
+                    "SP2":              s2,
+                    "RING":             rg,
+                    "Φ":                round(ph, 2),
+                    "ΔSm (J/K·mol)":    round(dsm, 2),
+                    "ΔHm (kJ/mol)":     dhm if dhm else "—",
+                    "T_m (°C)":         tm_c if tm_c is not None else "—",
+                    "SMILES":           row.get("smiles", ""),
+                })
+
+            df_res = pd.DataFrame(results)
+
+            # Summary stats
+            dsm_vals = df_res["ΔSm (J/K·mol)"]
+            s1, s2c, s3c, s4 = st.columns(4)
+            s1.metric("Compounds", len(df_res))
+            s2c.metric("Mean ΔSm",  f"{dsm_vals.mean():.1f} J/K·mol")
+            s3c.metric("Min ΔSm",   f"{dsm_vals.min():.1f} J/K·mol")
+            s4.metric("Max ΔSm",    f"{dsm_vals.max():.1f} J/K·mol")
+
+            # Results table
+            st.dataframe(df_res, use_container_width=True, height=420, hide_index=True)
+
+            # Bar chart
+            fig_bar = go.Figure(go.Bar(
+                x=df_res["Compound"],
+                y=df_res["ΔSm (J/K·mol)"],
+                marker=dict(
+                    color=df_res["ΔSm (J/K·mol)"],
+                    colorscale="RdYlGn",
+                    showscale=True,
+                    colorbar=dict(title="ΔSm<br>(J/K·mol)"),
+                ),
+                text=df_res["ΔSm (J/K·mol)"],
+                textposition="outside",
+            ))
+            fig_bar.add_hline(y=56.5, line_dash="dash", line_color="#888",
+                               annotation_text="Walden 56.5 J/K·mol")
+            fig_bar.update_layout(
+                title="Batch ΔSm Results",
+                xaxis_title="Compound", yaxis_title="ΔSm (J/K·mol)",
+                height=420, plot_bgcolor="#0e1117",
+                paper_bgcolor="#0e1117", font_color="white",
+                xaxis_tickangle=-35,
+            )
+            st.plotly_chart(fig_bar, use_container_width=True)
+
+            # Scatter σ vs Φ coloured by ΔSm
+            fig_scat = go.Figure(go.Scatter(
+                x=df_res["σ"], y=df_res["Φ"],
+                mode="markers+text",
+                text=df_res["Compound"],
+                textposition="top center",
+                textfont=dict(size=9),
+                marker=dict(
+                    size=14,
+                    color=df_res["ΔSm (J/K·mol)"],
+                    colorscale="Viridis",
+                    showscale=True,
+                    colorbar=dict(title="ΔSm<br>(J/K·mol)"),
+                    line=dict(color="white", width=1),
+                ),
+            ))
+            fig_scat.update_layout(
+                title="Compound Map: σ vs Φ (colour = ΔSm)",
+                xaxis_title="σ (Symmetry Number)",
+                yaxis_title="Φ (Flexibility Number)",
+                height=440, plot_bgcolor="#0e1117",
+                paper_bgcolor="#0e1117", font_color="white",
+            )
+            st.plotly_chart(fig_scat, use_container_width=True)
+
+            # Tm chart (if available)
+            tm_rows = df_res[df_res["T_m (°C)"] != "—"].copy()
+            if not tm_rows.empty:
+                tm_rows["T_m (°C)"] = tm_rows["T_m (°C)"].astype(float)
+                fig_tm2 = go.Figure(go.Bar(
+                    x=tm_rows["Compound"], y=tm_rows["T_m (°C)"],
+                    marker=dict(
+                        color=tm_rows["T_m (°C)"],
+                        colorscale="Plasma", showscale=True,
+                        colorbar=dict(title="T_m (°C)"),
+                    ),
+                    text=tm_rows["T_m (°C)"].round(1),
+                    textposition="outside",
+                ))
+                fig_tm2.add_hline(y=25, line_dash="dash", line_color="#888",
+                                   annotation_text="25 °C")
+                fig_tm2.update_layout(
+                    title="Predicted Melting Points",
+                    xaxis_title="Compound", yaxis_title="T_m (°C)",
+                    height=380, plot_bgcolor="#0e1117",
+                    paper_bgcolor="#0e1117", font_color="white",
+                    xaxis_tickangle=-35,
+                )
+                st.plotly_chart(fig_tm2, use_container_width=True)
+
+            # Download
+            st.download_button(
+                "⬇️  Download Results CSV",
+                df_res.to_csv(index=False),
+                "dsm_batch_results.csv",
+                "text/csv",
+            )
+
+    else:
+        st.info(
+            "👆 Choose an input method above. Download the CSV template, "
+            "fill in your compounds, then upload it here."
+        )
+
+        # Show example output preview
+        st.subheader("📋 Example Output Preview")
+        example_preview = pd.DataFrame([
+            {"Compound": "Benzene",     "σ": 12, "Φ": 1.0, "ΔSm (J/K·mol)": 35.84, "T_m (°C)": 5.5},
+            {"Compound": "Aspirin",     "σ":  1, "Φ": 1.0, "ΔSm (J/K·mol)": 56.50, "T_m (°C)": 135.5},
+            {"Compound": "n-Hexane",    "σ":  1, "Φ": 4.0, "ΔSm (J/K·mol)": 68.03, "T_m (°C)": -95.0},
+            {"Compound": "Cyclohexane", "σ":  6, "Φ": 1.0, "ΔSm (J/K·mol)": 41.60, "T_m (°C)": 6.8},
+            {"Compound": "Naphthalene", "σ":  4, "Φ": 1.0, "ΔSm (J/K·mol)": 44.97, "T_m (°C)": 80.2},
+        ])
+        st.dataframe(example_preview, use_container_width=True, hide_index=True)
+
 
 # ── Footer ───────────────────────────────────────────────────────
 st.markdown("---")
