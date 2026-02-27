@@ -374,9 +374,8 @@ Install only:
 `pip install streamlit plotly pandas numpy`
 
 ---
-### ⚠️ σ is Always Manual
-Auto-computation of σ requires 3D geometry  
-analysis — always assign from symmetry rules.
+### ⚠️ σ Cannot Be Auto-Computed
+σ depends on 3D point-group symmetry and cannot be derived from SMILES alone. Always assign it manually using the preset table or the Theory guide.
     """)
 
 # ── Tabs ──────────────────────────────────────────────────────────
@@ -438,12 +437,12 @@ with tab1:
                         f' title="Molecule (requires internet)" />',
                         unsafe_allow_html=True,
                     )
-                    st.warning("⚠️ σ must still be assigned manually below.")
+                    st.warning("⚠️ SP3/SP2/RING have been auto-computed from SMILES. σ cannot be derived from SMILES — assign it manually from the preset below.")
 
         # ── σ ─────────────────────────────────────────────────────
         st.markdown("---")
         st.markdown("**σ — Rotational Symmetry Number**")
-        st.caption("Number of identical molecular orientations by rotation. Min = 1.")
+        st.caption("Number of identical molecular orientations by pure rotation. Cannot be auto-computed — use the preset or Quick-Reference table below.")
 
         SIGMA_PRESETS = {
             "1  — asymmetric / most molecules":               1,
